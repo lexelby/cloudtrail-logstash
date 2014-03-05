@@ -1,0 +1,8 @@
+slimes
+gzip
+datetime
+requests
+glob
+boto
+
+
