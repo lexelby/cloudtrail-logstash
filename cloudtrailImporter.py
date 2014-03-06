@@ -58,6 +58,7 @@ class cloudtrailImporter:
         self.dryRun = dryRun
         self.esServer = esServer
         self.mapping = mapping
+        self.slimesRequester = slimes.Requester([self.esServer])
         return None
 
     def connectS3Bucket(self, bucket):
@@ -70,6 +71,9 @@ class cloudtrailImporter:
         conn = S3Connection()
         return conn.get_bucket(bucket)
 
+    def connectES(self):
+        self.
+
     def importRecordToES(self, record):
         """
         Import event object into ElasticSearch
@@ -77,13 +81,12 @@ class cloudtrailImporter:
         Attributes:
         record (dict): Event object to be imported
         """
-        my_requester = slimes.Requester([self.esServer])
         r = requests.get("http://{0}/{1}".format(self.esServer,record['@index']))
         if r.status_code != 200:
             r = requests.put("http://{0}/{1}".format(self.esServer,record['@index']), data=self.mapping)
         try:
             if not self.dryRun:
-                my_requester.request(method="post",
+                self.slimesRequester.request(method="post",
                         myindex=record['@index'],
                         mytype=record['eventName'],
                         mydata=record)
