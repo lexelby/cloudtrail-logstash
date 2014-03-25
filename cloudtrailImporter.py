@@ -82,9 +82,9 @@ class cloudtrailImporter:
         Attributes:
         record (dict): Event object to be imported
         """
-	if self.recordsImported > 0 and self.recordsImported%1000 == 0:
-		print "Records Imported {0}".format(self.recordsImported)
-		time.sleep(10)
+        if self.recordsImported > 0 and self.recordsImported%1000 == 0:
+		    print "Records Imported {0}".format(self.recordsImported)
+		    time.sleep(10)
         r = requests.get("http://{0}/{1}".format(self.esServer,record['@index']))
         if r.status_code != 200:
             r = requests.put("http://{0}/{1}".format(self.esServer,record['@index']), data=self.mapping)
@@ -102,8 +102,8 @@ class cloudtrailImporter:
             print 'Error with import'
             print json.dumps(record)
             return False
-    self.recordsImported += 1
-    return True
+        self.recordsImported += 1
+        return True
 
     def prepareRecord(self, record):
         """
