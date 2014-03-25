@@ -34,8 +34,10 @@ import datetime
 import subprocess
 import os
 import requests
+import requests_cache
 import glob
 import boto.sqs
+import time
 from boto.sqs.message import RawMessage
 from boto.s3.connection import S3Connection
 from boto.s3.key import Key
@@ -59,6 +61,8 @@ class cloudtrailImporter:
         self.esServer = esServer
         self.mapping = mapping
         self.slimesRequester = slimes.Requester([self.esServer])
+        self.recordsImported = 0
+        requests_cache.install_cache('cloudtrailImporter', expire_after=120 )
         return None
 
     def connectS3Bucket(self, bucket):
@@ -71,9 +75,6 @@ class cloudtrailImporter:
         conn = S3Connection()
         return conn.get_bucket(bucket)
 
-    def connectES(self):
-        self.
-
     def importRecordToES(self, record):
         """
         Import event object into ElasticSearch
@@ -81,15 +82,19 @@ class cloudtrailImporter:
         Attributes:
         record (dict): Event object to be imported
         """
+	if self.recordsImported > 0 and self.recordsImported%1000 == 0:
+		print "Records Imported {0}".format(self.recordsImported)
+		time.sleep(10)
         r = requests.get("http://{0}/{1}".format(self.esServer,record['@index']))
         if r.status_code != 200:
             r = requests.put("http://{0}/{1}".format(self.esServer,record['@index']), data=self.mapping)
+        r.connection.close()
         try:
             if not self.dryRun:
                 self.slimesRequester.request(method="post",
-                        myindex=record['@index'],
-                        mytype=record['eventName'],
-                        mydata=record)
+                                        myindex=record['@index'],
+                                        mytype=record['eventName'],
+                                        mydata=record)
             else:
                 print 'DryRun:'
                 print record
@@ -97,7 +102,8 @@ class cloudtrailImporter:
             print 'Error with import'
             print json.dumps(record)
             return False
-        return True
+    self.recordsImported += 1
+    return True
 
     def prepareRecord(self, record):
         """
@@ -113,7 +119,7 @@ class cloudtrailImporter:
             timestamp = datetime.datetime.strptime(record['eventTime'],'%Y-%m-%dT%H:%M:%SZ') 
             record['@timestamp'] = timestamp.strftime("%Y-%m-%dT%H:%M:%S.000Z")
             record.pop('eventTime', None)
-            record['@index'] = "cloudtrail-{0}-{1:%Y}-{1:%m}-{1:%d}".format(record['userIdentity']['accountId'],timestamp)
+            record['@index'] = "cloudtrail-{0}-{1:%Y}-{1:%m}".format(record['userIdentity']['accountId'],timestamp)
         except:
             print 'failed to prepare record'
         return record
@@ -125,11 +131,14 @@ class cloudtrailImporter:
         Attributes:
         recordset (dict): Full cloudtrail as read from file
         """
+        status = False
         if 'Records' in recordset:
             for record in recordset['Records']:
                 status = self.importRecordToES(self.prepareRecord(record))
                 if not status:
                     return status
+        else:
+            print recordset
         return status
 
     def importLocalFile(self, filename):
@@ -187,6 +196,7 @@ class cloudtrailImporter:
         """
         bucket = self.connectS3Bucket(bucket)
         keys = bucket.list(foldername)
+        status = False
         for key in keys:
             status = self.importS3Key(key)
             if not status:
@@ -206,6 +216,12 @@ class cloudtrailImporter:
         sqsQueue.set_message_class(RawMessage)
         return sqsQueue
 
+    def releaseSQSMessage(self, message):
+	"""
+        Put message back on SQS queue
+        """
+        return message.change_visibility(0)
+
     def importSQSMessage(self, message):
         """
         Process SQS message and import the cloudtrail it refers to
@@ -213,7 +229,13 @@ class cloudtrailImporter:
         Attributes:
         message (sqs.message): the SQS message as pulled from the queue
         """
-        item = json.loads(json.loads(message.get_body())['Message'])
+        messageBody = json.loads(message.get_body())
+        if(messageBody['Type'] == 'SubscriptionConfirmation'):
+            print "SubscriptionConfirmation Awaiting"
+	    self.releaseSQSMessage(message)
+            return False
+        item = json.loads(messageBody['Message'])
+        status = False
         for filename in item['s3ObjectKey']:
             print filename
             status = self.importS3File(bucket=item['s3Bucket'], filename=filename)

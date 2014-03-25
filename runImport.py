@@ -45,7 +45,7 @@ parser.add_argument('--import-s3-folder', default=False, type=str,
 parser.add_argument('--s3-bucket', default=False, type=str,
                     dest='s3bucket',
                     help='Bucket containing the file/folder to import from')
-parser.add_argument('--es-server', nargs='+', default='localhost:9200',
+parser.add_argument('--es-server', nargs='+', default='127.0.0.1:9200',
                     dest='esServer',
                     help='List of es servers inc port (eg. localhost:9200)')
 parser.add_argument('--import-sqs', default=False, type=str,
