@@ -1,6 +1,6 @@
 slimes
-datetime
 requests
+requests_cache
 boto
 
 
