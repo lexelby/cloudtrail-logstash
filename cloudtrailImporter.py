@@ -63,8 +63,8 @@ class cloudtrailImporter:
         self.esServer = esServer
         self.mapping = mapping
         self.slimesRequester = slimes.Requester([self.esServer])
-    self.recordsImported = 0
-    requests_cache.install_cache('cloudtrailImporter', expire_after=120)
+        self.recordsImported = 0
+        requests_cache.install_cache('cloudtrailImporter', expire_after=120)
 
     def connectS3Bucket(self, bucket):
         """
