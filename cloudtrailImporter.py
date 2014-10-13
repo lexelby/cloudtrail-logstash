@@ -43,12 +43,14 @@ from boto.s3.connection import S3Connection
 from boto.s3.key import Key
 import StringIO
 
+
 class cloudtrailImporter:
+
     def __init__(self,
-            esServer='localhost:9200',
-            mapping = '{ "mappings": { "_default_": { "dynamic_templates": [ { "string_template": { "match": "*", "match_mapping_type": "string", "mapping": { "type": "string", "index": "not_analyzed" } } } ] } } }',
-            dryRun = False,
-            ):
+                 esServer='localhost:9200',
+                 mapping='{ "mappings": { "_default_": { "dynamic_templates": [ { "string_template": { "match": "*", "match_mapping_type": "string", "mapping": { "type": "string", "index": "not_analyzed" } } } ] } } }',
+                 dryRun=False,
+                 ):
         """
         Initialise the cloudtrailImporter
 
@@ -61,9 +63,8 @@ class cloudtrailImporter:
         self.esServer = esServer
         self.mapping = mapping
         self.slimesRequester = slimes.Requester([self.esServer])
-        self.recordsImported = 0
-        requests_cache.install_cache('cloudtrailImporter', expire_after=120 )
-        return None
+    self.recordsImported = 0
+    requests_cache.install_cache('cloudtrailImporter', expire_after=120)
 
     def connectS3Bucket(self, bucket):
         """
@@ -82,22 +83,22 @@ class cloudtrailImporter:
         Attributes:
         record (dict): Event object to be imported
         """
-        if self.recordsImported > 0 and self.recordsImported%1000 == 0:
-		    print "Records Imported {0}".format(self.recordsImported)
-		    time.sleep(10)
-        r = requests.get("http://{0}/{1}".format(self.esServer,record['@index']))
-        if r.status_code != 200:
-            r = requests.put("http://{0}/{1}".format(self.esServer,record['@index']), data=self.mapping)
-        r.connection.close()
+        if self.dryRun:
+            print 'DryRun:'
+            print record
+            return True
+        if self.recordsImported > 0 and self.recordsImported % 1000 == 0:
+            print "Records Imported {0}".format(self.recordsImported)
+            time.sleep(10)
+            r = requests.get("http://{0}/{1}".format(self.esServer, record['@index']))
+            if r.status_code != 200:
+                r = requests.put("http://{0}/{1}".format(self.esServer, record['@index']), data=self.mapping)
+            r.connection.close()
         try:
-            if not self.dryRun:
-                self.slimesRequester.request(method="post",
-                                        myindex=record['@index'],
-                                        mytype=record['eventName'],
-                                        mydata=record)
-            else:
-                print 'DryRun:'
-                print record
+            self.slimesRequester.request(method="post",
+                                         myindex=record['@index'],
+                                         mytype=record['eventName'],
+                                         mydata=record)
         except:
             print 'Error with import'
             print json.dumps(record)
@@ -116,10 +117,10 @@ class cloudtrailImporter:
         record (dict): original event object as read from a cloudtrail file
         """
         try:
-            timestamp = datetime.datetime.strptime(record['eventTime'],'%Y-%m-%dT%H:%M:%SZ') 
+            timestamp = datetime.datetime.strptime(record['eventTime'], '%Y-%m-%dT%H:%M:%SZ')
             record['@timestamp'] = timestamp.strftime("%Y-%m-%dT%H:%M:%S.000Z")
             record.pop('eventTime', None)
-            record['@index'] = "cloudtrail-{0}-{1:%Y}-{1:%m}".format(record['userIdentity']['accountId'],timestamp)
+            record['@index'] = "cloudtrail-{0}-{1:%Y}-{1:%m}".format(record['userIdentity']['accountId'], timestamp)
         except:
             print 'failed to prepare record'
         return record
@@ -160,7 +161,7 @@ class cloudtrailImporter:
         for root, dirs, files in os.walk(foldername):
             for name in files:
                 if name.endswith(".json.gz"):
-                    status = self.importLocalFile("{0}/{1}".format(root,name))
+                    status = self.importLocalFile("{0}/{1}".format(root, name))
                     if not status:
                         return status
         return status
@@ -172,7 +173,7 @@ class cloudtrailImporter:
         Attributes:
         key (boto.s3.Key): key object to import into ElasticSearch
         """
-        return self.importRecordSet(json.loads(gzip.GzipFile(fileobj = StringIO.StringIO(key.get_contents_as_string())).read()))
+        return self.importRecordSet(json.loads(gzip.GzipFile(fileobj=StringIO.StringIO(key.get_contents_as_string())).read()))
 
     def importS3File(self, bucket, filename):
         """
@@ -211,8 +212,8 @@ class cloudtrailImporter:
         sqsQueueName (str): name of the SQS queue to connect to
         sqsRegion (str): Region the SQS queue is in
         """
-        conn = boto.sqs.connect_to_region("us-east-1")
-        sqsQueue = conn.get_queue('atl-cloudtrail')
+        conn = boto.sqs.connect_to_region(sqsRegion)
+        sqsQueue = conn.get_queue(sqsQueueName)
         sqsQueue.set_message_class(RawMessage)
         return sqsQueue
 
@@ -232,8 +233,11 @@ class cloudtrailImporter:
         messageBody = json.loads(message.get_body())
         if(messageBody['Type'] == 'SubscriptionConfirmation'):
             print "SubscriptionConfirmation Awaiting"
-	    self.releaseSQSMessage(message)
+            self.releaseSQSMessage(message)
             return False
+        if(messageBody['message'] == 'CloudTrail validation message.'):
+            print 'CloudTrail validation message.'
+            return True
         item = json.loads(messageBody['Message'])
         status = False
         for filename in item['s3ObjectKey']:
@@ -257,7 +261,8 @@ class cloudtrailImporter:
 
     def getJobFromSQS(self, sqsQueueName='cloudtrail', sqsRegion='us-east-1', messageCount=1):
         """
-        Gets cloudtrail SNS notifications from an SQS queue and reads the path to the cloudtrail file for import to ElasticSearch
+        Gets cloudtrail SNS notifications from an SQS queue and reads the
+        path to the cloudtrail file for import to ElasticSearch
 
         Attributes:
         sqsQueueName (str): name of the SQS queue to connect to
@@ -279,7 +284,8 @@ class cloudtrailImporter:
 
     def getAllJobsFromSQS(self, sqsQueueName='cloudtrail', sqsRegion='us-east-1'):
         """
-        Gets cloudtrail SNS notifications from an SQS queue and reads the path to the cloudtrail file for import to ElasticSearch until queue is empty
+        Gets cloudtrail SNS notifications from an SQS queue and reads the
+        path to the cloudtrail file for import to ElasticSearch until queue is empty
 
         Attributes:
         sqsQueueName (str): name of the SQS queue to connect to
@@ -291,4 +297,3 @@ class cloudtrailImporter:
         if status == -1:
             return False
         return True
-
