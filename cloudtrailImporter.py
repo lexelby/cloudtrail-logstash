@@ -235,7 +235,7 @@ class cloudtrailImporter:
             print "SubscriptionConfirmation Awaiting"
             self.releaseSQSMessage(message)
             return False
-        if(messageBody['message'] == 'CloudTrail validation message.'):
+        if(messageBody['Message'] == 'CloudTrail validation message.'):
             print 'CloudTrail validation message.'
             return True
         item = json.loads(messageBody['Message'])
