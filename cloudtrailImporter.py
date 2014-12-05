@@ -90,7 +90,7 @@ class cloudtrailImporter:
         if self.recordsImported > 0 and self.recordsImported % 1000 == 0:
             print "Records Imported {0}".format(self.recordsImported)
             time.sleep(10)
-            r = requests.get("http://{0}/{1}".format(self.esServer, record['@index']))
+            r = requests.head("http://{0}/{1}".format(self.esServer, record['@index']))
             if r.status_code != 200:
                 r = requests.put("http://{0}/{1}".format(self.esServer, record['@index']), data=self.mapping)
             r.connection.close()
