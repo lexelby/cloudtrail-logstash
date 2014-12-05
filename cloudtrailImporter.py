@@ -90,10 +90,10 @@ class cloudtrailImporter:
         if self.recordsImported > 0 and self.recordsImported % 1000 == 0:
             print "Records Imported {0}".format(self.recordsImported)
             time.sleep(10)
-            r = requests.head("http://{0}/{1}".format(self.esServer, record['@index']))
-            if r.status_code != 200:
-                r = requests.put("http://{0}/{1}".format(self.esServer, record['@index']), data=self.mapping)
-            r.connection.close()
+        r = requests.head("http://{0}/{1}".format(self.esServer, record['@index']))
+        if r.status_code != 200:
+            r = requests.put("http://{0}/{1}".format(self.esServer, record['@index']), data=self.mapping)
+        r.connection.close()
         try:
             self.slimesRequester.request(method="post",
                                          myindex=record['@index'],
