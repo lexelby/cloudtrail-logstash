@@ -22,8 +22,8 @@ Help runImport.py
 usage: runImport.py [-h] [--dry-run] [--import-file SYNCFILENAME]
                     [--import-folder SYNCFOLDER] [--import-s3-file S3FILE]
                     [--import-s3-folder S3FOLDER] [--s3-bucket S3BUCKET]
-                    [--es-server ESSERVER [ESSERVER ...]]
-                    [--import-sqs SQSQUEUENAME] [--sqs-region SQSREGION]
+                    [--es-server ESSERVER] [--import-sqs SQSQUEUENAME]
+                    [--sqs-region SQSREGION]
                     [--sqs-number-of-messages NUMBEROFMESSAGES]
 
 optional arguments:
@@ -38,8 +38,7 @@ optional arguments:
   --import-s3-folder S3FOLDER
                         Perform import from s3 file
   --s3-bucket S3BUCKET  Bucket containing the file/folder to import from
-  --es-server ESSERVER [ESSERVER ...]
-                        List of es servers inc port (eg. localhost:9200)
+  --es-server ESSERVER  List of es servers inc port (eg. localhost:9200)
   --import-sqs SQSQUEUENAME
                         Initiate SQS import from queue name
   --sqs-region SQSREGION
