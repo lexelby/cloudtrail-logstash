@@ -27,14 +27,15 @@
 # Mike Fuller <mfuller@atlassian.com>
 #
 
-import slimes
+import sys
+import argparse
+import socket
 import json
 import gzip
 import datetime
 import subprocess
 import os
 import requests
-import requests_cache
 import glob
 import boto.sqs
 import time
@@ -47,9 +48,8 @@ import StringIO
 class CloudtrailImporter:
 
     def __init__(self,
-                 esServer='localhost:9200',
-                 mapping='{ "mappings": { "_default_": { "dynamic_templates": [ { "string_template": { "match": "*", "match_mapping_type": "string", "mapping": { "type": "string", "index": "not_analyzed" } } } ] } } }',
                  dryRun=False,
+                 logstashServer=None,
                  ):
         """
         Initialise the cloudtrailImporter
@@ -60,11 +60,17 @@ class CloudtrailImporter:
         dryRun (bool): if True wont do any import or SQS delete actions
         """
         self.dryRun = dryRun
-        self.esServer = esServer
-        self.mapping = mapping
-        self.slimesRequester = slimes.Requester([self.esServer])
+
+        if not logstashServer:
+            raise Exception("no logstash server specified")
+
+        logstashServer = logstashServer.split(':')
+
+        self.logstash_host = logstashServer[0]
+        self.logstash_port = int(logstashServer[1])
         self.recordsImported = 0
-        requests_cache.install_cache('cloudtrailImporter', expire_after=120)
+
+        self._init_logstash_socket()
 
     def connectS3Bucket(self, bucket):
         """
@@ -76,9 +82,13 @@ class CloudtrailImporter:
         conn = S3Connection()
         return conn.get_bucket(bucket)
 
-    def importRecordToES(self, record):
+    def _init_logstash_socket(self):
+        self.logstash_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.logstash_socket.connect((self.logstash_host, self.logstash_port))
+
+    def importRecordToLogstash(self, record):
         """
-        Import event object into ElasticSearch
+        Import event object into Logstash
 
         Attributes:
         record (dict): Event object to be imported
@@ -89,53 +99,38 @@ class CloudtrailImporter:
             return True
         if self.recordsImported > 0 and self.recordsImported % 1000 == 0:
             print "Records Imported {0}".format(self.recordsImported)
-            time.sleep(10)
-        r = requests.head("http://{0}/{1}".format(self.esServer, record['@index']))
-        if r.status_code != 200:
-            r = requests.put("http://{0}/{1}".format(self.esServer, record['@index']), data=self.mapping)
-        r.connection.close()
-        try:
-            self.slimesRequester.request(method="post",
-                                         myindex=record['@index'],
-                                         mytype=record['eventName'],
-                                         mydata=record)
-        except:
-            print 'Error with import'
-            print json.dumps(record)
-            return False
+
+        message = json.dumps(record) + "\n"
+        sent = False
+
+        for try_num in xrange(1, 11):
+            try:
+                self.logstash_socket.sendall(message)
+                sent = True
+                break
+            except socket.error, e:
+                print >> sys.stderr, "socket error: %s" % e
+                time.sleep(10)
+                self.logstash_socket.close()
+                self._init_logstash_socket()
+
+        if not sent:
+            sys.exit("Failed to send message after %d tries: %s" % (try_num, message))
+
         self.recordsImported += 1
         return True
 
-    def prepareRecord(self, record):
-        """
-        Prepares a raw cloudtrail event to be imported into ElasticSearch.
-        Adds a @timestamp key with the transformed timestamp to be used by Kibana
-        Removes the eventTime key as this is not needed
-        Adds a @index key for use by the importRecordToES() to know where to import the record
-
-        Attributes:
-        record (dict): original event object as read from a cloudtrail file
-        """
-        try:
-            timestamp = datetime.datetime.strptime(record['eventTime'], '%Y-%m-%dT%H:%M:%SZ')
-            record['@timestamp'] = timestamp.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            record.pop('eventTime', None)
-            record['@index'] = "cloudtrail-{0}-{1:%Y}-{1:%m}".format(record['userIdentity']['accountId'], timestamp)
-        except:
-            print 'failed to prepare record'
-        return record
-
     def importRecordSet(self, recordset):
         """
-        Breaks a full cloudtrail recordset into individual events for import into ElasticSearch
+        Breaks a full cloudtrail recordset into individual events for import
 
         Attributes:
-        recordset (dict): Full cloudtrail as read from file
+        recordset (dict): Full cloudtrail log data as read from file
         """
         status = False
         if 'Records' in recordset:
             for record in recordset['Records']:
-                status = self.importRecordToES(self.prepareRecord(record))
+                status = self.importRecordToLogstash(record)
                 if not status:
                     return status
         else:
@@ -144,7 +139,7 @@ class CloudtrailImporter:
 
     def importLocalFile(self, filename):
         """
-        Opens local file and imports the cloudtrail into ElasticSearch
+        Opens local file and imports the log
 
         Attributes:
         filename (str): name of the file to open and import
@@ -153,7 +148,7 @@ class CloudtrailImporter:
 
     def importLocalFolder(self, foldername):
         """
-        Opens all json.gz files in folder andimports the cloudtrails into ElasticSearch
+        Opens all json.gz files in folder and imports them
 
         Attributes:
         foldername (str): name of the folder to search (this is recursive)
@@ -168,16 +163,16 @@ class CloudtrailImporter:
 
     def importS3Key(self, key):
         """
-        imports Boto S3 Key into ElasticSearch
+        imports log from Boto S3 Key
 
         Attributes:
-        key (boto.s3.Key): key object to import into ElasticSearch
+        key (boto.s3.Key): key object to import
         """
         return self.importRecordSet(json.loads(gzip.GzipFile(fileobj=StringIO.StringIO(key.get_contents_as_string())).read()))
 
     def importS3File(self, bucket, filename):
         """
-        Connects to S3 bucket and imports file into ElasticSearch
+        Connects to S3 bucket and imports file
 
         Attributes:
         bucket (str): name of the bucket the file is inside
@@ -218,7 +213,7 @@ class CloudtrailImporter:
         return sqsQueue
 
     def releaseSQSMessage(self, message):
-	"""
+        """
         Put message back on SQS queue
         """
         return message.change_visibility(0)
@@ -262,7 +257,7 @@ class CloudtrailImporter:
     def getJobFromSQS(self, sqsQueueName='cloudtrail', sqsRegion='us-east-1', messageCount=1):
         """
         Gets cloudtrail SNS notifications from an SQS queue and reads the
-        path to the cloudtrail file for import to ElasticSearch
+        path to the cloudtrail file for import
 
         Attributes:
         sqsQueueName (str): name of the SQS queue to connect to
@@ -282,21 +277,27 @@ class CloudtrailImporter:
                     return -1
         return status
 
-    def getAllJobsFromSQS(self, sqsQueueName='cloudtrail', sqsRegion='us-east-1'):
+    def getAllJobsFromSQS(self, sqsQueueName='cloudtrail', sqsRegion='us-east-1', sqsPollInterval=None):
         """
         Gets cloudtrail SNS notifications from an SQS queue and reads the
-        path to the cloudtrail file for import to ElasticSearch until queue is empty
+        path to the cloudtrail file for import until queue is empty
 
         Attributes:
         sqsQueueName (str): name of the SQS queue to connect to
         sqsRegion (str): Region the SQS queue is in
         """
-        status = True
-        while status:
-            status = self.getJobFromSQS(sqsQueueName=sqsQueueName, sqsRegion=sqsRegion)
-        if status == -1:
-            return False
-        return True
+        while True:
+            status = True
+            while status:
+                status = self.getJobFromSQS(sqsQueueName=sqsQueueName, sqsRegion=sqsRegion, messageCount=10)
+            if status == -1:
+                return False
+            else:
+                if sqsPollInterval:
+                    sys.stdout.flush()
+                    time.sleep(sqsPollInterval)
+                else:
+                    return True
 
 
 if __name__ == '__main__':
@@ -315,9 +316,9 @@ if __name__ == '__main__':
     parser.add_argument('--s3-bucket', default=False, type=str,
                         dest='s3bucket',
                         help='Bucket containing the file/folder to import from')
-    parser.add_argument('--es-server', type=str, default='127.0.0.1:9200',
-                        dest='esServer',
-                        help='List of es servers inc port (eg. localhost:9200)')
+    parser.add_argument('--logstash-server', type=str, default='127.0.0.1:10000',
+                        dest='logstashServer',
+                        help='Logstash server:port (using tcp input with json_lines codec)')
     parser.add_argument('--import-sqs', default=False, type=str,
                         dest='sqsQueueName',
                         help='Initiate SQS import from queue name')
@@ -327,9 +328,11 @@ if __name__ == '__main__':
     parser.add_argument('--sqs-number-of-messages', default=0, type=int,
                         dest='numberOfMessages',
                         help='Number of messages to consume before exiting. (Default: all)')
+    parser.add_argument('--sqs-poll-interval', default=None, type=int, dest='sqsPollInterval', metavar='SECONDS',
+                        help='Poll the SQS queue repeatedly, pausing SECONDS between each poll.')
     args = parser.parse_args()
 
-    ci = CloudtrailImporter(esServer=args.esServer, dryRun=args.dryrun)
+    ci = CloudtrailImporter(logstashServer=args.logstashServer, dryRun=args.dryrun)
     if args.syncfilename:
         ci.importLocalFile(args.syncfilename)
     if args.syncfolder:
@@ -340,8 +343,9 @@ if __name__ == '__main__':
         ci.importS3Folder(args.s3bucket, args.s3folder)
     if args.sqsQueueName and args.numberOfMessages == 0:
         ci.getAllJobsFromSQS(sqsQueueName=args.sqsQueueName,
-                                sqsRegion=args.sqsRegion)
+                             sqsRegion=args.sqsRegion,
+                             sqsPollInterval=args.sqsPollInterval)
     if args.sqsQueueName and args.numberOfMessages > 0:
         ci.getJobFromSQS(sqsQueueName=args.sqsQueueName,
-                            sqsRegion=args.sqsRegion,
-                            messageCount=args.numberOfMessages)
+                         sqsRegion=args.sqsRegion,
+                         messageCount=args.numberOfMessages)
